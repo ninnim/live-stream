@@ -1,0 +1,114 @@
+# MediaMTX — Phase 1 media gateway
+#
+# See docs/decisions/0001-phase-1-media-gateway.md for why this component was chosen.
+#
+# Responsibilities:
+#   - accept native browser contribution over WHIP (WebRTC), so no external encoder is needed;
+#   - serve viewers over LL-HLS (scale) and WHEP (low latency);
+#   - record sessions to a shared volume;
+#   - expose a read-only control API the platform polls for stream health.
+#
+# Every authorization decision is delegated back to the control plane: this process holds no user
+# database and no long-lived stream keys.
+
+logLevel: info
+logDestinations: [stdout]
+
+###############################################
+# Control API — internal only. Never publish port 9997 outside the compose network.
+###############################################
+api: yes
+apiAddress: :9997
+
+metrics: yes
+metricsAddress: :9998
+
+###############################################
+# Authentication
+#
+# Delegated over HTTP to the platform API. MediaMTX posts the action, path, and presented
+# credentials; the API answers 200 (allow) or 401 (deny) after validating the short-lived,
+# path-scoped token it issued.
+#
+# The shared secret travels as a query parameter because MediaMTX sends no custom headers. It is
+# defence in depth behind network isolation, not the primary control.
+###############################################
+# NOTE: `authHTTPAddress` is overridden at runtime by the MTX_AUTHHTTPADDRESS environment variable
+# (see docker-compose.yml), because the shared secret must not be committed and MediaMTX does not
+# expand ${VAR} placeholders inside this file. The value below is a safe default that denies
+# everything if the override is ever missing.
+authMethod: http
+authHTTPAddress: http://api:8080/internal/media/auth
+
+# The control API and metrics are reachable only from inside the compose network, so they do not
+# round-trip to the platform API for every scrape.
+authHTTPExclude:
+  - action: api
+  - action: metrics
+  - action: pprof
+
+###############################################
+# WebRTC — WHIP ingest and WHEP playback
+###############################################
+webrtc: yes
+webrtcAddress: :8889
+webrtcLocalUDPAddress: :8189
+webrtcAllowOrigin: '*'
+webrtcICEServers2:
+  - url: stun:stun.l.google.com:19302
+
+###############################################
+# HLS — scalable viewer delivery
+###############################################
+hls: yes
+hlsAddress: :8888
+hlsVariant: lowLatency
+hlsAllowOrigin: '*'
+hlsSegmentCount: 7
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+###############################################
+# RTMP / SRT — optional professional inputs.
+#
+# Still disabled: native browser broadcasting is the required workflow, and an unused open ingest
+# port is only an attack surface. External encoders attach to the same Live Session model, so these
+# can be enabled later without any other change.
+###############################################
+rtmp: no
+srt: no
+
+###############################################
+# RTSP — internal read path for the egress relay (Phase 2).
+#
+# Enabled so the relay can pull a session and republish it to external platforms; FFmpeg reads RTSP
+# far more reliably than it reads HLS, and without the added latency of a segmented format.
+#
+# Port 8554 is deliberately NOT published in docker-compose.yml, exactly like the control API: it is
+# reachable only from inside the compose network. Enabling the protocol does not weaken
+# authorization — every read still round-trips to the control plane, and the relay presents a
+# short-lived READ-scoped credential as its RTSP password.
+###############################################
+rtsp: yes
+rtspAddress: :8554
+rtspTransports: [tcp]
+
+###############################################
+# Recording
+#
+# Written to a volume shared with the API, which reads it to finalize recording metadata when a
+# session ends. Retention is deliberately unlimited here; lifecycle policy belongs to the object
+# store that replaces this in a later phase.
+###############################################
+pathDefaults:
+  record: yes
+  recordPath: /recordings/%path/%Y-%m-%d_%H-%M-%S-%f
+  recordFormat: fmp4
+  recordPartDuration: 1s
+  recordSegmentDuration: 1h
+  recordDeleteAfter: 0s
+
+# Sessions use unguessable, server-generated path names, so paths are matched by the catch-all
+# rather than being pre-registered. Authorization still runs on every publish and read.
+paths:
+  all_others:

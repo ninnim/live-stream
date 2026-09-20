@@ -1,0 +1,46 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+  </PropertyGroup>
+  <ItemGroup>
+    <!-- Persistence -->
+    <PackageVersion Include="Anthropic" Version="12.46.0" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Relational" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.EntityFrameworkCore.Sqlite" Version="9.0.3" />
+    <PackageVersion Include="Npgsql.EntityFrameworkCore.PostgreSQL" Version="9.0.4" />
+    <!-- Identity / tokens -->
+    <PackageVersion Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Identity.Core" Version="9.0.3" />
+    <!-- OpenID Connect discovery, JWKS retrieval, and ID token validation for enterprise SSO.
+         Pinned to the version JwtBearer 9.0.3 already resolves, so SSO and bearer validation share
+         one IdentityModel stack rather than loading two. -->
+    <PackageVersion Include="Microsoft.IdentityModel.Protocols.OpenIdConnect" Version="8.0.1" />
+    <!-- Hosting / abstractions -->
+    <PackageVersion Include="Microsoft.Extensions.Http" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.Extensions.Caching.Abstractions" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="9.0.3" />
+    <!-- Observability -->
+    <PackageVersion Include="OpenTelemetry.Extensions.Hosting" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.18.0" />
+    <PackageVersion Include="OpenTelemetry.Instrumentation.Http" Version="1.18.0" />
+    <!-- Outbound email. MailKit rather than System.Net.Mail.SmtpClient, which Microsoft's own
+         documentation tells you not to use for new work: it handles modern TLS negotiation and
+         authentication poorly, and a password reset is the one message that must actually arrive. -->
+    <PackageVersion Include="MailKit" Version="4.18.0" />
+    <!-- Testing -->
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.13.0" />
+    <PackageVersion Include="Microsoft.AspNetCore.Mvc.Testing" Version="9.0.3" />
+    <PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.3" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="3.0.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.4" />
+    <PackageVersion Include="Testcontainers.PostgreSql" Version="4.3.0" />
+  </ItemGroup>
+</Project>

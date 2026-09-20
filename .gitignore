@@ -1,0 +1,38 @@
+# Build output
+bin/
+obj/
+out/
+dist/
+.next/
+node_modules/
+*.tsbuildinfo
+*.user
+*.suo
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+appsettings.Local.json
+appsettings.*.Local.json
+*.pem
+*.key
+
+# Local runtime data
+infrastructure/docker/data/
+recordings/
+*.log
+
+# Tooling
+.vs/
+.vscode/*
+!.vscode/extensions.json
+.idea/
+TestResults/
+coverage/
+*.received.*
+
+# Playwright artefacts
+apps/web/test-results/
+apps/web/playwright-report/
+apps/web/blob-report/

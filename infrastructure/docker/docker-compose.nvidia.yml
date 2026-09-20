@@ -1,0 +1,43 @@
+# NVIDIA GPU passthrough for the egress relay.
+#
+# Overlay, not part of the base file, because a device reservation is a hard requirement: compose
+# refuses to start the service on a machine that cannot satisfy it. The base stack has to come up on
+# a laptop with no GPU, so asking for one is opt-in.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d
+#
+# Requires the NVIDIA Container Toolkit (Linux) or Docker Desktop with WSL2 and a current NVIDIA
+# driver (Windows). Verify before using it:
+#
+#   docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all \
+#     nvidia/cuda:12.4.0-base-ubuntu22.04 nvidia-smi
+#
+# The relay still trials the encoder at startup, so if any of this is wrong it falls back to
+# libx264 and says so in its log rather than failing a broadcast. Confirm it took effect:
+#
+#   docker compose logs relay | grep "Selected video encoder"
+#   # Selected video encoder NVIDIA NVENC (hardware=True)
+
+services:
+  relay:
+    environment:
+      # `video` is the one that matters and the one that is not there by default.
+      #
+      # A plain `--gpus all` grants `compute,utility`: CUDA works, `nvidia-smi` works, and
+      # `libnvidia-encode.so.1` is absent — so NVENC fails with "Cannot load libnvidia-encode.so.1"
+      # on a machine whose GPU is otherwise perfectly visible. That failure looks exactly like
+      # having no GPU at all, which is what makes it worth spelling out here.
+      NVIDIA_DRIVER_CAPABILITIES: video,compute,utility
+      NVIDIA_VISIBLE_DEVICES: all
+
+      # Skip the probe's other candidates. The probe would arrive here anyway; naming it means a
+      # deployment that asked for NVENC and did not get it says so at startup.
+      Relay__VideoCodec: h264_nvenc
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, video]

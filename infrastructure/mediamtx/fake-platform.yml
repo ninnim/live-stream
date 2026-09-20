@@ -1,0 +1,37 @@
+# A throwaway RTMP receiver that stands in for an external platform in tests.
+#
+# Deliberately trivial and deliberately open: it exists to prove that real media, encoded by the
+# relay, arrives at an RTMP endpoint. It is never part of the running product — see
+# infrastructure/docker/docker-compose.e2e.yml.
+
+logLevel: info
+logDestinations: [stdout]
+
+# The control API is how a test asks "did the stream actually arrive?" and how it severs a
+# connection to simulate the platform dropping us. Only ever reachable inside the test network.
+api: yes
+apiAddress: :9997
+metrics: no
+
+# The only protocol under test.
+rtmp: yes
+rtmpAddress: :1935
+
+rtsp: no
+hls: no
+webrtc: no
+srt: no
+
+# Accepts anything. A real platform authenticates the stream key; here the key is only used as the
+# path, so a test can confirm the relay published to exactly the path it was told to.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    permissions:
+      - action: publish
+      - action: read
+      # The control API is how a test inspects and severs connections.
+      - action: api
+
+paths:
+  all_others:

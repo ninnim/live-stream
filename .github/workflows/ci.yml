@@ -1,0 +1,177 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per branch: a superseded run tells you nothing.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api:
+    name: API — build, test, migrations
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/api
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Restore
+        run: dotnet restore LiveStream.sln
+
+      - name: Build
+        # Warnings are errors in Directory.Build.props, so this also enforces static analysis.
+        run: dotnet build LiveStream.sln --no-restore -c Release
+
+      - name: Unit tests
+        run: dotnet test tests/LiveStream.UnitTests/LiveStream.UnitTests.csproj --no-build -c Release --logger "trx;LogFileName=unit.trx"
+
+      - name: Integration tests
+        run: dotnet test tests/LiveStream.IntegrationTests/LiveStream.IntegrationTests.csproj --no-build -c Release --logger "trx;LogFileName=integration.trx"
+
+      - name: Database tests (real PostgreSQL via Testcontainers)
+        # Docker is available on GitHub-hosted runners, so these are not skipped here.
+        run: dotnet test tests/LiveStream.DatabaseTests/LiveStream.DatabaseTests.csproj --no-build -c Release --logger "trx;LogFileName=database.trx"
+
+      - name: Check migrations match the model
+        run: |
+          dotnet tool install --global dotnet-ef --version 9.0.3
+          export PATH="$PATH:$HOME/.dotnet/tools"
+          dotnet-ef migrations has-pending-model-changes \
+            --project src/LiveStream.Infrastructure \
+            --startup-project src/LiveStream.Infrastructure
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-test-results
+          path: services/api/**/TestResults/*.trx
+
+  web:
+    name: Web — lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  e2e:
+    name: End-to-end — real media path
+    runs-on: ubuntu-latest
+    # Only worth the runtime once the units agree the code is sane.
+    needs: [api, web]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Generate stack secrets
+        working-directory: infrastructure/docker
+        run: |
+          {
+            echo "JWT_SIGNING_KEY=$(openssl rand -base64 48)"
+            echo "INTERNAL_API_SECRET=$(openssl rand -hex 32)"
+            echo "POSTGRES_PASSWORD=$(openssl rand -hex 16)"
+            # Distribution (Phase 2). SECRETS_KEY must decode to exactly 32 bytes.
+            echo "RELAY_SECRET=$(openssl rand -hex 32)"
+            echo "SECRETS_KEY=$(openssl rand -base64 32)"
+            # The suite drives every request from one address, so the per-IP abuse limits need
+            # headroom. Enforcement itself is covered by LiveStream.IntegrationTests.
+            echo "RATE_LIMIT_AUTH_PER_MINUTE=1000"
+            echo "RATE_LIMIT_SESSION_PER_MINUTE=1000"
+            echo "RATE_LIMIT_CREDENTIAL_PER_MINUTE=1000"
+            echo "RATE_LIMIT_DESTINATION_PER_MINUTE=1000"
+            echo "RATE_LIMIT_DEVICE_PER_MINUTE=1000"
+            echo "RATE_LIMIT_PAIRING_PER_MINUTE=1000"
+          } > .env
+
+      - name: Start the stack
+        working-directory: infrastructure/docker
+        # The e2e overlay adds a disposable RTMP receiver standing in for an external platform, so
+        # the distribution specs exercise the real egress path without a YouTube account.
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml --env-file .env up --build -d
+
+      - name: Wait for the stack to be ready
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health/live >/dev/null 2>&1 \
+               && curl -fsS -o /dev/null http://localhost:3000/login 2>/dev/null; then
+              echo "stack ready"; exit 0
+            fi
+            sleep 5
+          done
+          echo "stack did not become ready"; exit 1
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install chromium --with-deps
+
+      - name: Run the broadcast journey
+        working-directory: apps/web
+        env:
+          # The e2e overlay publishes both control APIs, so the specs reach them over HTTP rather
+          # than shelling out to Docker.
+          E2E_MEDIA_CONTROL_API: http://localhost:9997
+          E2E_FAKE_PLATFORM_API: http://localhost:9998
+        run: npm run test:e2e
+
+      - name: Dump service logs on failure
+        if: failure()
+        working-directory: infrastructure/docker
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml --env-file .env logs --no-color --tail 200
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: |
+            apps/web/playwright-report/
+            apps/web/test-results/
+
+      - name: Tear down
+        if: always()
+        working-directory: infrastructure/docker
+        run: docker compose -f docker-compose.yml -f docker-compose.e2e.yml --env-file .env down -v

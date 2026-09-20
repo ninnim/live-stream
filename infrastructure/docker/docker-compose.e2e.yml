@@ -1,0 +1,56 @@
+# End-to-end overlay: a disposable RTMP receiver that stands in for an external platform.
+#
+# Used only by the distribution end-to-end spec and by manual testing. It lets the whole egress path
+# — relay, encoder, RTMP handshake, failure isolation — be exercised without a YouTube or Facebook
+# account, and without pointing test traffic at a real service.
+#
+# Start alongside the main stack:
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml --env-file .env up -d
+
+name: livestream-phase1
+
+services:
+  # Publishes the gateway's control API so end-to-end specs can sever a publisher without needing a
+  # Docker CLI wherever they happen to run. Test-only: the base compose file leaves 9997 unpublished,
+  # and this overlay is never part of a deployment.
+  mediamtx:
+    ports:
+      - "9997:9997"
+
+  fake-platform:
+    image: bluenviron/mediamtx:1.11.3
+    container_name: livestream-fake-platform
+    volumes:
+      - ../mediamtx/fake-platform.yml:/mediamtx.yml:ro
+    # Published so a test can probe what the "platform" actually received and sever the connection
+    # on demand. Both are test affordances; nothing in the product talks to this service.
+    ports:
+      - "1935:1935"
+      - "9998:9997"
+
+  # A disposable mail server, for the same reason as the RTMP receiver above: the password-reset
+  # path — MailKit, the SMTP handshake, the message this platform actually composes — can be
+  # exercised end to end without a real relay and without posting test mail at anybody.
+  #
+  # Mailpit accepts everything and exposes what it received over HTTP, which is how a spec reads
+  # back the link it was sent.
+  mailpit:
+    image: axllent/mailpit:v1.21
+    container_name: livestream-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      # Its HTTP API. Test-only, like the two above.
+      - "8025:8025"
+
+  # Points the API at it. Without this the API would log messages instead of sending them, and the
+  # SMTP path — the part most likely to be wrong in a deployment — would never be exercised.
+  api:
+    environment:
+      Email__Enabled: "true"
+      Email__Host: mailpit
+      Email__Port: "1025"
+      # Mailpit speaks plain SMTP on a container network. A real deployment does not.
+      Email__UseStartTls: "false"
+      Email__FromAddress: no-reply@livestream.test

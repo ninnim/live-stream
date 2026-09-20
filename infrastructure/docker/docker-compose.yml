@@ -1,0 +1,207 @@
+# Local development stack for Phase 1.
+#
+# Start with:  docker compose -f infrastructure/docker/docker-compose.yml --env-file .env up
+# See docs/troubleshooting/phase-1-local-setup.md for prerequisites and verification steps.
+
+name: livestream-phase1
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: livestream
+      POSTGRES_USER: livestream
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-livestream}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U livestream -d livestream"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  mediamtx:
+    image: bluenviron/mediamtx:1.11.3
+    environment:
+      # MediaMTX overrides any config key from MTX_<KEY>. Used here so the shared secret stays out
+      # of the committed config file — it cannot be interpolated into the YAML.
+      MTX_AUTHHTTPADDRESS: "http://api:8080/internal/media/auth?s=${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set}"
+    volumes:
+      - ../mediamtx/mediamtx.yml:/mediamtx.yml:ro
+      - recordings:/recordings
+    ports:
+      - "8888:8888"       # HLS playback
+      - "8889:8889"       # WHIP ingest / WHEP playback (HTTP signalling)
+      - "8189:8189/udp"   # WebRTC media
+      # 9997 (control API) and 9998 (metrics) are deliberately NOT published: they are reachable
+      # only from inside this network.
+    depends_on:
+      api:
+        condition: service_started
+
+  api:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/api.Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_HTTP_PORTS: "8080"
+      ConnectionStrings__Postgres: "Host=postgres;Port=5432;Database=livestream;Username=livestream;Password=${POSTGRES_PASSWORD:-livestream}"
+      Database__MigrateOnStartup: "true"
+      Jwt__SigningKey: ${JWT_SIGNING_KEY:?JWT_SIGNING_KEY must be set}
+      InternalApi__SharedSecret: ${INTERNAL_API_SECRET:?INTERNAL_API_SECRET must be set}
+      # Internal address for the control API; public addresses for what the browser is handed.
+      Media__MediaMtx__ControlApiUrl: "http://mediamtx:9997"
+      Media__MediaMtx__PublicWebRtcUrl: ${PUBLIC_WEBRTC_URL:-http://localhost:8889}
+      Media__MediaMtx__PublicHlsUrl: ${PUBLIC_HLS_URL:-http://localhost:8888}
+      Recording__RootPath: "/recordings"
+      Cors__AllowedOrigins__0: ${WEB_ORIGIN:-http://localhost:3000}
+      # Abuse controls partition by user, falling back to IP. Real users arrive from many addresses;
+      # an end-to-end suite hammers from one, so it raises these. Defaults stay production-sane.
+      RateLimits__AuthenticationPerMinute: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      RateLimits__SessionCreationPerMinute: ${RATE_LIMIT_SESSION_PER_MINUTE:-20}
+      RateLimits__CredentialIssuancePerMinute: ${RATE_LIMIT_CREDENTIAL_PER_MINUTE:-60}
+      RateLimits__DestinationManagementPerMinute: ${RATE_LIMIT_DESTINATION_PER_MINUTE:-30}
+      RateLimits__DeviceManagementPerMinute: ${RATE_LIMIT_DEVICE_PER_MINUTE:-30}
+      # Load-bearing, not hygienic: this is the one unauthenticated endpoint where a short secret
+      # can be guessed at. See docs/decisions/0010-multi-device-contribution.md.
+      RateLimits__PairingAttemptsPerMinute: ${RATE_LIMIT_PAIRING_PER_MINUTE:-10}
+      # Where a QR code points. Must be reachable from the phone that scans it — a link to
+      # localhost resolves to the phone itself.
+      JoinLink__BaseUrl: ${JOIN_LINK_BASE_URL:-${WEB_ORIGIN:-http://localhost:3000}}
+      # Outbound email — password reset links, and nothing else yet.
+      #
+      # Off by default. With it off the API writes each message to its own log in full, so a
+      # developer can complete a reset without a mail server: `docker compose logs api` carries the
+      # link. Turn it on and point it at a relay for anything real; the reset flow is unusable in
+      # production without one.
+      Email__Enabled: ${SMTP_ENABLED:-false}
+      Email__Host: ${SMTP_HOST:-}
+      Email__Port: ${SMTP_PORT:-587}
+      Email__UseStartTls: ${SMTP_USE_STARTTLS:-true}
+      Email__Username: ${SMTP_USERNAME:-}
+      # A secret: supplied from the environment, never committed, never logged.
+      Email__Password: ${SMTP_PASSWORD:-}
+      Email__FromAddress: ${SMTP_FROM_ADDRESS:-no-reply@localhost}
+      Email__FromName: ${SMTP_FROM_NAME:-Live Studio}
+      PasswordReset__ProductName: ${PRODUCT_NAME:-Live Studio}
+      Sources__MaxSourcesPerSession: ${MAX_SOURCES_PER_SESSION:-8}
+      # Multi-platform distribution (Phase 2).
+      Distribution__Relay__BaseUrl: "http://relay:8080"
+      Distribution__Relay__SharedSecret: ${RELAY_SECRET:?RELAY_SECRET must be set}
+      # Encrypts stream keys and OAuth tokens at rest. Losing this key makes every stored
+      # credential unreadable, so it belongs in a secret store in production.
+      #
+      # The key id is fixed here rather than templated: Compose interpolates values, not mapping
+      # keys, so a ${VAR} on the left would be sent as that literal text. Rotation adds a second
+      # Secrets__Keys__<id> variable and repoints PrimaryKeyId — see the Phase 2 report.
+      Secrets__PrimaryKeyId: "local-1"
+      Secrets__Keys__local-1: ${SECRETS_KEY:?SECRETS_KEY must be set}
+      # AI operations (Phase 6). Off by default: a deployment should have to choose to send its
+      # session data to a model, rather than discover that it already had.
+      #
+      # The key is server-side only. Nothing in the browser bundle ever sees it — the studio asks
+      # this API to queue work, and this API talks to the model.
+      Ai__Enabled: ${AI_ENABLED:-false}
+      Ai__ApiKey: ${ANTHROPIC_API_KEY:-}
+      Ai__Model: ${AI_MODEL:-claude-opus-5}
+      # Provider OAuth clients. Absent by default: every platform still works with a stream key,
+      # and account linking simply reports as unconfigured.
+      Distribution__Providers__YouTube__ClientId: ${YOUTUBE_CLIENT_ID:-}
+      Distribution__Providers__YouTube__ClientSecret: ${YOUTUBE_CLIENT_SECRET:-}
+      Distribution__Providers__Facebook__ClientId: ${FACEBOOK_CLIENT_ID:-}
+      Distribution__Providers__Facebook__ClientSecret: ${FACEBOOK_CLIENT_SECRET:-}
+      # Scale, security and globalization (Phase 7).
+      #
+      # Role composes one binary into a tier: All runs everything (the single-container
+      # default), Api serves HTTP only, Worker runs the background loops only. Leader
+      # election is what keeps two replicas from reconciling the same session or paying for
+      # the same AI job twice.
+      Runtime__Role: ${RUNTIME_ROLE:-All}
+      Runtime__LeaderElection: ${RUNTIME_LEADER_ELECTION:-true}
+      Runtime__Region: ${DEPLOYMENT_REGION:-}
+      # What a new workspace is entitled to. Pro matches the limits shipped since Phase 1,
+      # so enabling plans changes nothing until an operator moves somebody.
+      Governance__DefaultPlan: ${DEFAULT_PLAN:-Pro}
+      Governance__RetentionEnabled: ${RETENTION_ENABLED:-true}
+      # Where an identity provider sends the browser back to. Must match what is registered
+      # at the provider, exactly.
+      Sso__WebAppBaseUrl: ${WEB_ORIGIN:-http://localhost:3000}
+      # Optional CDN in front of HLS playback. Only HLS moves: WHEP is a negotiated peer
+      # connection, and a cache in front of it would break it rather than speed it up.
+      Media__MediaMtx__PublicHlsCdnUrl: ${PUBLIC_HLS_CDN_URL:-}
+      # Unit rates for the cost report. Unset means the platform reports that line as
+      # unknown rather than as zero, because a cost shown as free is one nobody budgets for.
+      Costs__Currency: ${COST_CURRENCY:-USD}
+      Costs__StreamingPerHour: ${COST_STREAMING_PER_HOUR:-}
+      Costs__EgressPerGb: ${COST_EGRESS_PER_GB:-}
+      Costs__RecordingStoragePerGbMonth: ${COST_STORAGE_PER_GB_MONTH:-}
+      Costs__DestinationRelayPerHour: ${COST_RELAY_PER_HOUR:-}
+    # Longer than the shutdown drain plus the time the loops need to hand their leases
+    # back. Docker sends SIGKILL when this elapses, and a killed instance keeps its leases
+    # until they expire — which is exactly the pause a rolling deploy is meant to avoid.
+    stop_grace_period: 30s
+    ports:
+      - "8080:8080"
+    volumes:
+      - recordings:/recordings:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  relay:
+    build:
+      context: ../..
+      dockerfile: services/relay/LiveStream.Relay/Dockerfile
+    environment:
+      ASPNETCORE_ENVIRONMENT: ${ASPNETCORE_ENVIRONMENT:-Development}
+      ASPNETCORE_HTTP_PORTS: "8080"
+      Relay__SharedSecret: ${RELAY_SECRET:?RELAY_SECRET must be set}
+      Relay__SourceRtspBaseUrl: "rtsp://mediamtx:8554"
+      # libx264 always works. Set to "copy" only if you know the browser negotiated H.264 —
+      # see docs/decisions/0009-multi-platform-distribution.md.
+      # `auto` trials each encoder at startup and takes the strongest that actually works. To let
+      # it find a GPU, the container needs one: add `devices: [/dev/dri:/dev/dri]` for Intel or AMD,
+      # or `deploy.resources.reservations.devices` with the nvidia driver for NVENC. Without that
+      # passthrough ffmpeg still *lists* the hardware encoders and none of them can initialise.
+      Relay__VideoCodec: ${RELAY_VIDEO_CODEC:-auto}
+      Relay__VideoPreset: ${RELAY_VIDEO_PRESET:-veryfast}
+      Relay__VideoBitrateKbps: ${RELAY_VIDEO_BITRATE_KBPS:-6000}
+      # Forced constant output rate. A WebRTC source has no frame rate of its own — a static
+      # shared screen produces frames only when something changes — and platforms expect a steady
+      # stream. Raise to 60 for gameplay, at roughly double the bitrate.
+      Relay__VideoFrameRate: ${RELAY_VIDEO_FRAME_RATE:-60}
+      Relay__AudioBitrateKbps: ${RELAY_AUDIO_BITRATE_KBPS:-160}
+      Relay__AudioSampleRate: ${RELAY_AUDIO_SAMPLE_RATE:-48000}
+      Relay__MaxVideoWidth: ${RELAY_MAX_VIDEO_WIDTH:-1920}
+      Relay__MaxVideoHeight: ${RELAY_MAX_VIDEO_HEIGHT:-1080}
+      # Generate the kind of media a broadcast is missing rather than sending a stream without it.
+      # Facebook Live accepts a video-only stream, counts it as live, and never shows it to anybody;
+      # the same is true of an audio-only one everywhere. Turn this off only to send exactly what
+      # the source carries. See docs/decisions/0017-broadcast-quality.md.
+      Relay__SynthesizeMissingTracks: ${RELAY_SYNTHESIZE_MISSING_TRACKS:-true}
+      Relay__MaxConcurrentRelays: ${RELAY_MAX_CONCURRENT:-50}
+    # No published ports: a request to this service carries a stream key, so it is reachable only
+    # from inside this network.
+    depends_on:
+      - mediamtx
+
+  web:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: ${PUBLIC_API_URL:-http://localhost:8080}
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  recordings:
