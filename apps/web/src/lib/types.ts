@@ -96,6 +96,28 @@ export interface IngestCredential {
   iceServers: IceServer[];
 }
 
+/**
+ * What an external encoder needs to publish into a session — a phone streaming a game, OBS, a
+ * capture card (ADR 0022).
+ *
+ * `streamKey` is returned exactly once, when it is issued, and is never retrievable afterwards:
+ * the server stores only a hash. Asking again rotates it, which is also how a key pasted into the
+ * wrong window is made harmless.
+ */
+export interface StreamKey {
+  protocol: string;
+  /** The server half, for encoders with two fields. */
+  serverUrl: string;
+  /** The key half. Begins with the session path, so server + "/" + key is the full URL. */
+  streamKey: string;
+  /** Pre-joined, for encoders and command lines that take one URL. */
+  fullUrl: string;
+  /** Null unless the deployment also offers SRT, which survives a lossy mobile uplink better. */
+  srtUrl: string | null;
+  expiresAt: string;
+  expiresInSeconds: number;
+}
+
 export interface Recording {
   id: string;
   status: "PENDING" | "RECORDING" | "FINALIZING" | "READY" | "FAILED";

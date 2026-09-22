@@ -13,6 +13,23 @@ public enum IngestCredentialScope
 
     /// <summary>Read media from the session path (private/unlisted playback).</summary>
     Read = 1,
+
+    /// <summary>
+    /// Publish into the session path from an external encoder, using a key typed in by hand.
+    /// </summary>
+    /// <remarks>
+    /// Deliberately separate from <see cref="Publish"/> even though both authorize the same action,
+    /// because the two have opposite lifecycles and the difference is a security property rather
+    /// than a detail. A <see cref="Publish"/> credential is minted per connection attempt by code
+    /// that can silently mint another, so it lives for minutes. A stream key is typed into OBS or a
+    /// phone encoder once and re-presented on every reconnect for the length of a show, so it must
+    /// outlive a connection — and, because it does, it must be rotatable and revocable on demand.
+    ///
+    /// Keeping them as separate scopes is what lets the rules differ without a flag: an encoder key
+    /// can be revoked without touching the browser's ability to publish, and a leaked browser token
+    /// still expires in minutes. See docs/decisions/0022-external-encoder-ingest.md.
+    /// </remarks>
+    StreamKey = 2,
 }
 
 /// <summary>

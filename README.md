@@ -13,16 +13,28 @@ grant camera and microphone access, preview, broadcast from the browser without 
 recover from temporary network loss, and stop cleanly. See
 `docs/implementation-notes/phase-1-report.md`.
 
+**Phase 3 — Mobile Broadcasting: implemented.** The same creator can do all of it from a phone: a
+phone-shaped broadcaster, installable to a home screen, publishing over the same WHIP path into the
+same session. Front/back camera switching mid-broadcast, network-aware quality that adapts itself,
+recovery from the interruptions only phones have, and a screen that stays awake while on air. See
+`docs/implementation-notes/phase-3-report.md` and `docs/decisions/0021-mobile-broadcasting.md`.
+
 ```text
-apps/web/                   Next.js Live Studio and viewer
+apps/web/                   Next.js Live Studio, mobile broadcaster, and viewer
 services/api/               ASP.NET Core control plane
 infrastructure/             Docker Compose, MediaMTX config, SQL script
 docs/decisions/             Architecture decision records
-docs/implementation-notes/  Architecture map, API reference, phase report
+docs/implementation-notes/  Architecture map, API reference, phase reports
 docs/troubleshooting/       Local setup and verification
 ```
 
-Get started: `docs/troubleshooting/phase-1-local-setup.md`.
+**External encoders: supported.** A phone game, a console through a capture card, or OBS can publish
+into the same session over RTMP or SRT, with a rotatable session-scoped stream key. Off unless
+configured. See `docs/decisions/0022-external-encoder-ingest.md`.
+
+Get started: `docs/troubleshooting/phase-1-local-setup.md`. From a phone:
+`docs/troubleshooting/mobile-broadcasting.md`. Streaming a game:
+`docs/troubleshooting/streaming-a-game-from-your-phone.md`.
 
 ## Implementation rule
 

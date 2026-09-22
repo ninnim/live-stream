@@ -35,6 +35,10 @@ services:
       - "8888:8888"       # HLS playback
       - "8889:8889"       # WHIP ingest / WHEP playback (HTTP signalling)
       - "8189:8189/udp"   # WebRTC media
+      # External encoder ingest (ADR 0022) — a phone streaming a game, OBS, a capture card.
+      # Both are authorized by the same control-plane callback as every other publisher.
+      - "1935:1935"       # RTMP ingest
+      - "8890:8890/udp"   # SRT ingest
       # 9997 (control API) and 9998 (metrics) are deliberately NOT published: they are reachable
       # only from inside this network.
     depends_on:
@@ -56,6 +60,13 @@ services:
       Media__MediaMtx__ControlApiUrl: "http://mediamtx:9997"
       Media__MediaMtx__PublicWebRtcUrl: ${PUBLIC_WEBRTC_URL:-http://localhost:8889}
       Media__MediaMtx__PublicHlsUrl: ${PUBLIC_HLS_URL:-http://localhost:8888}
+      # Where an external encoder publishes. Unset disables stream keys entirely, so a deployment
+      # that does not want an open ingest port simply leaves these out (ADR 0022).
+      #
+      # Must be an address the *encoder* can reach: a phone on the same network needs the machine's
+      # LAN address here, never localhost, which on a phone is the phone.
+      Media__MediaMtx__PublicRtmpUrl: ${PUBLIC_RTMP_URL:-rtmp://localhost:1935}
+      Media__MediaMtx__PublicSrtUrl: ${PUBLIC_SRT_URL:-srt://localhost:8890}
       Recording__RootPath: "/recordings"
       Cors__AllowedOrigins__0: ${WEB_ORIGIN:-http://localhost:3000}
       # Abuse controls partition by user, falling back to IP. Real users arrive from many addresses;

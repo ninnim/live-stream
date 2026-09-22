@@ -39,8 +39,13 @@ cd infrastructure/docker
 docker compose -f docker-compose.yml -f docker-compose.e2e.yml --env-file .env up -d
 ```
 
-It listens on `1935` and exposes its own control API on `9998`. Add a **Custom RTMP** destination
+It listens on `1935` *inside the compose network* — which is how the relay reaches it, and what the
+commands below use — and exposes its own control API on `9998`. Add a **Custom RTMP** destination
 with server URL `rtmp://fake-platform:1935/live` and any stream key, then go live.
+
+From the **host** it is published on `1936`, not `1935`: the real gateway took 1935 when external
+encoder ingest was enabled (ADR 0022), and two containers cannot publish the same host port. Only
+manual probing from the host is affected.
 
 Confirm the stream actually arrived:
 

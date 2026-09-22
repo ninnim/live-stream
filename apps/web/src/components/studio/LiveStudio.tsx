@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { CameraPreview } from "@/components/studio/CameraPreview";
 import { DestinationPanel } from "@/components/studio/DestinationPanel";
 import { DeviceControls } from "@/components/studio/DeviceControls";
+import { EncoderPanel } from "@/components/studio/EncoderPanel";
 import { HealthPanel } from "@/components/studio/HealthPanel";
 import { AiPanel } from "@/components/studio/AiPanel";
 import { AudioMixerPanel } from "@/components/studio/AudioMixerPanel";
@@ -32,6 +33,7 @@ import { useMachineCapability } from "@/hooks/useMachineCapability";
 import { useLiveSession } from "@/hooks/useLiveSession";
 import { useMediaDevices } from "@/hooks/useMediaDevices";
 import { useProgram } from "@/hooks/useProgram";
+import { useStreamKey } from "@/hooks/useStreamKey";
 import { useStudioConfig } from "@/hooks/useStudioConfig";
 import { useStudioHotkeys } from "@/hooks/useStudioHotkeys";
 import { useSources } from "@/hooks/useSources";
@@ -104,6 +106,9 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
   }, [broadcaster.replaceTrack, broadcaster.removeTrack]);
 
   const studioConfig = useStudioConfig(sessionId);
+
+  // Publishing from something that is not this browser: a phone game, a capture card, OBS.
+  const streamKey = useStreamKey(sessionId);
   const ai = useAiJobs(sessionId);
 
   const cutTo = useCallback(
@@ -159,20 +164,34 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
     status?.endedAt ?? session?.endedAt,
   );
 
+  /**
+   * Whether the video is coming from somewhere other than this browser.
+   *
+   * Having asked for a stream key is the signal. It is not proof that an encoder is connected —
+   * nothing here can know that before the server does — but it is the operator saying which kind
+   * of broadcast this is, which is what the go-live path needs to know (ADR 0022).
+   */
+  const usingEncoder = streamKey.key !== null;
+
   // A camera is optional and so is a microphone, but something has to be going out: a
-  // broadcast with neither is a session that would sit in STARTING until it timed out.
+  // broadcast with neither is a session that would sit in STARTING until it timed out. An
+  // encoder is that something, arriving over RTMP rather than from this page.
   const canGoLive =
-    media.permission === "granted" &&
-    media.hasCapture &&
+    (usingEncoder || (media.permission === "granted" && media.hasCapture)) &&
     !isBroadcasting &&
     !isStarting &&
     !isEnded;
 
   const handleGoLive = useCallback(() => {
-    if (media.stream) {
+    // Local capture wins when there is any: a studio that has a camera open is broadcasting that
+    // camera, and an encoder attached to the same session simply becomes another source.
+    if (media.stream && media.hasCapture) {
       void broadcaster.goLive(media.stream);
+      return;
     }
-  }, [broadcaster, media.stream]);
+
+    void broadcaster.goLiveExternal();
+  }, [broadcaster, media.stream, media.hasCapture]);
 
   const handleStopLive = useCallback(() => {
     void broadcaster.stopLive();
@@ -227,6 +246,11 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
     if (!isBroadcasting || isEnded || health?.ingestConnected !== false) return;
     if (broadcaster.busy || broadcaster.connectionState !== "idle") return;
 
+    // Never while an encoder is the source: "ingest is down" there means the encoder is
+    // reconnecting, and republishing this browser's camera would take the session away from the
+    // thing the audience is watching (ADR 0022).
+    if (usingEncoder) return;
+
     if (media.permission === "idle") {
       // Already-granted permission is re-issued without prompting; a revoked one surfaces the
       // usual friendly banner.
@@ -246,6 +270,7 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
     media.stream,
     broadcaster.busy,
     broadcaster.connectionState,
+    usingEncoder,
   ]);
 
   if (loading && !session) {
@@ -268,6 +293,21 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
           <Badge tone={statusTone(sessionStatus)} pulse={isLive}>
             {statusLabel(sessionStatus)}
           </Badge>
+          {/*
+            The phone broadcaster, reachable from here rather than only by opening the link on a
+            phone: it is how somebody checks what their mobile broadcast will look like, and how a
+            touch device that was classified as a desktop gets to the screen it wanted.
+
+            A plain anchor rather than `Link`, for the reason given at the matching link in
+            `MobileDetailsSheet`: this route does not read the query string on the server, so a
+            client-side navigation to it changes the address bar and nothing else.
+          */}
+          <a
+            href={`/studio/${sessionId}?view=mobile`}
+            className="text-sm text-slate-400 underline-offset-4 hover:underline"
+          >
+            Phone view
+          </a>
           <Link href="/dashboard" className="text-sm text-slate-400 underline-offset-4 hover:underline">
             Back to sessions
           </Link>
@@ -400,6 +440,12 @@ export function LiveStudio({ sessionId }: { sessionId: string }) {
           />
         </>
       ) : null}
+
+      {/*
+        Offered whatever the camera is doing, and deliberately not behind the permission prompt:
+        somebody broadcasting a phone game has no reason to grant this browser a camera at all.
+      */}
+      <EncoderPanel streamKey={streamKey} sessionIsEnded={isEnded} />
 
       <SourcePanel sources={sources.sources} sessionIsEnded={isEnded} controller={sources} />
 

@@ -94,6 +94,166 @@ public sealed class IngestCredentialService(
     }
 
     /// <summary>
+    /// Issues — or rotates — the stream key an external encoder publishes with.
+    /// </summary>
+    /// <remarks>
+    /// This is the path that lets somebody broadcast a phone game, a console through a capture
+    /// card, or an OBS scene: all three are encoders that speak RTMP and none of them can run a
+    /// browser's credential handshake (docs/decisions/0022-external-encoder-ingest.md).
+    ///
+    /// Three deliberate differences from <see cref="IssueAsync"/>:
+    ///
+    /// <list type="bullet">
+    /// <item>It does not require the session to be expecting ingest yet. The key has to be
+    /// obtainable *before* going live, because it has to be typed into an encoder first. Publishing
+    /// with it still checks that, in <see cref="AuthorizeMediaAccessAsync"/> — the gate stays, it
+    /// just moves to the moment that matters.</item>
+    /// <item>Issuing revokes every previous key for the session. That makes this button both
+    /// "show me my key" and "the old one is compromised", which is the only way somebody who has
+    /// pasted a key into the wrong window can fix it themselves.</item>
+    /// <item>It refuses once a session is over. A key for a finished session could never publish
+    /// anything, and handing one out would only suggest otherwise.</item>
+    /// </list>
+    /// </remarks>
+    public async Task<StreamKeyResponse> IssueStreamKeyAsync(Guid sessionId, Guid userId,
+        CancellationToken cancellationToken)
+    {
+        var session = await db.LiveSessions
+                          .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
+                      ?? throw new DomainException(ErrorCodes.SessionNotFound, "Live session not found.");
+
+        await authorization.EnsureAllowedAsync(session, userId, WorkspacePermission.LiveSessionStart, cancellationToken);
+
+        var endpoints = mediaGateway.DescribeEndpoints(session.MediaPathName);
+
+        if (endpoints.RtmpIngestUrl is null)
+        {
+            throw new DomainException(ErrorCodes.ValidationFailed,
+                "External encoder ingest is not enabled on this deployment.");
+        }
+
+        if (LiveSessionStateMachine.IsTerminal(session.Status))
+        {
+            throw new DomainException(ErrorCodes.SessionNotReady,
+                "This session has ended. Start a new one to stream from an encoder.");
+        }
+
+        var now = clock.UtcNow;
+
+        // Rotation: the previous key stops working the instant a new one is shown. Anything else
+        // would leave a leaked key alive for its full lifetime with no way to kill it.
+        var replaced = await RevokeStreamKeysInternalAsync(session.Id, now, cancellationToken);
+
+        var (credential, plaintext) = IngestCredential.Issue(session.Id, userId, session.MediaPathName,
+            IngestCredentialScope.StreamKey, now, _options.StreamKeyLifetime);
+
+        db.IngestCredentials.Add(credential);
+        session.RecordEvent(LiveSessionEventType.CredentialIssued, now, userId,
+            detail: $"scope=STREAM_KEY ttlSeconds={_options.StreamKeyLifetimeSeconds} replaced={replaced}",
+            correlationId: correlation.CorrelationId);
+
+        await db.SaveChangesAsync(cancellationToken);
+
+        logger.LogInformation(
+            "Stream key issued session={SessionId} credentialId={CredentialId} replaced={Replaced} ttlSeconds={Ttl} correlationId={CorrelationId}",
+            session.Id, credential.Id, replaced, _options.StreamKeyLifetimeSeconds, correlation.CorrelationId);
+
+        return BuildStreamKeyResponse(endpoints, session.MediaPathName, plaintext, credential.ExpiresAt);
+    }
+
+    /// <summary>
+    /// Revokes the session's encoder keys, leaving browser credentials alone.
+    ///
+    /// Separate from <see cref="RevokeAllAsync"/> on purpose: "stop that encoder" and "cut off all
+    /// access to this session" are different intentions, and an operator reaching for the first
+    /// should not silently get the second while they are live from the studio.
+    /// </summary>
+    public async Task<int> RevokeStreamKeysAsync(Guid sessionId, Guid userId, CancellationToken cancellationToken)
+    {
+        var session = await db.LiveSessions
+                          .FirstOrDefaultAsync(s => s.Id == sessionId, cancellationToken)
+                      ?? throw new DomainException(ErrorCodes.SessionNotFound, "Live session not found.");
+
+        await authorization.EnsureAllowedAsync(session, userId, WorkspacePermission.LiveSessionStart, cancellationToken);
+
+        var now = clock.UtcNow;
+        var revoked = await RevokeStreamKeysInternalAsync(sessionId, now, cancellationToken);
+
+        if (revoked > 0)
+        {
+            session.RecordEvent(LiveSessionEventType.CredentialRevoked, now, userId,
+                detail: $"scope=STREAM_KEY count={revoked}",
+                correlationId: correlation.CorrelationId);
+
+            await db.SaveChangesAsync(cancellationToken);
+
+            logger.LogInformation("Revoked {Count} stream keys for session {SessionId}", revoked, sessionId);
+        }
+
+        return revoked;
+    }
+
+    private async Task<int> RevokeStreamKeysInternalAsync(Guid sessionId, DateTimeOffset now,
+        CancellationToken cancellationToken)
+    {
+        var existing = await db.IngestCredentials
+            .Where(c => c.LiveSessionId == sessionId
+                        && c.Scope == IngestCredentialScope.StreamKey
+                        && c.RevokedAt == null)
+            .ToListAsync(cancellationToken);
+
+        foreach (var credential in existing)
+        {
+            credential.Revoke(now);
+        }
+
+        return existing.Count;
+    }
+
+    /// <summary>
+    /// Assembles what an encoder is actually typed into.
+    /// </summary>
+    /// <remarks>
+    /// The credentials travel in the RTMP URL's query string, which is how MediaMTX reads them —
+    /// and how every encoder that offers a "server + stream key" pair can carry them at all, since
+    /// neither field is a place to put a username.
+    ///
+    /// The key deliberately begins with the path, so that an encoder joining server and key with a
+    /// slash produces exactly <see cref="StreamKeyResponse.FullUrl"/>. Getting that wrong is the
+    /// single most common way an encoder setup fails, and it fails with "connection refused"
+    /// rather than anything that points at the cause.
+    /// </remarks>
+    private static StreamKeyResponse BuildStreamKeyResponse(MediaEndpoints endpoints, string mediaPathName,
+        string plaintext, DateTimeOffset expiresAt)
+    {
+        var server = endpoints.RtmpIngestUrl!;
+        var key = $"{mediaPathName}?user={EncoderUser}&pass={Uri.EscapeDataString(plaintext)}";
+
+        // SRT carries the same credentials inside its stream id instead of a query string. Offered
+        // because it holds up on a lossy mobile uplink far better than RTMP, which is the whole
+        // case for streaming from a phone on cellular.
+        var srt = endpoints.SrtIngestUrl is null
+            ? null
+            : $"{endpoints.SrtIngestUrl}?streamid={Uri.EscapeDataString($"publish:{mediaPathName}:{EncoderUser}:{plaintext}")}";
+
+        return new StreamKeyResponse(
+            Protocol: "RTMP",
+            ServerUrl: server,
+            StreamKey: key,
+            FullUrl: $"{server}/{key}",
+            SrtUrl: srt,
+            ExpiresAt: expiresAt,
+            ExpiresInSeconds: (int)Math.Max(0, (expiresAt - DateTimeOffset.UtcNow).TotalSeconds));
+    }
+
+    /// <summary>
+    /// Username half of the encoder credential. The gateway forwards it untouched and this service
+    /// decides nothing on it — the token in the password is the whole authorization — but RTMP and
+    /// SRT both require a user component to be present.
+    /// </summary>
+    private const string EncoderUser = "broadcaster";
+
+    /// <summary>
     /// Called by the media gateway before it accepts a publisher or reader. Returns <c>true</c> only
     /// when the presented token is unexpired, unrevoked, scoped to this exact path, and the session
     /// is in a state that expects ingest.
@@ -142,7 +302,9 @@ public sealed class IngestCredentialService(
             return false;
         }
 
-        if (credential.Scope is not IngestCredentialScope.Publish)
+        // Both scopes authorize the same action; they differ in how long they live and how they are
+        // renewed, not in what they are allowed to do.
+        if (credential.Scope is not (IngestCredentialScope.Publish or IngestCredentialScope.StreamKey))
         {
             logger.LogWarning("Media publish denied: wrong scope credentialId={CredentialId}", credential.Id);
             return false;

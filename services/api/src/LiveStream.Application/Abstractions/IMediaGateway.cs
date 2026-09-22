@@ -62,7 +62,16 @@ public sealed record MediaEndpoints(
     string IngestProtocol,
     string IngestUrl,
     string HlsPlaybackUrl,
-    string WebRtcPlaybackUrl);
+    string WebRtcPlaybackUrl,
+    /// <summary>
+    /// Where an external encoder publishes, when external ingest is enabled — null when it is not.
+    ///
+    /// Null is the default and the safe one: RTMP is an open port that accepts connections from
+    /// anywhere, so it exists only where a deployment has turned it on deliberately
+    /// (docs/decisions/0022-external-encoder-ingest.md).
+    /// </summary>
+    string? RtmpIngestUrl = null,
+    string? SrtIngestUrl = null);
 
 /// <summary>Point-in-time media-plane observation for one ingest path.</summary>
 public sealed record MediaPathState(

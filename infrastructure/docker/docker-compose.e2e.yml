@@ -24,8 +24,13 @@ services:
       - ../mediamtx/fake-platform.yml:/mediamtx.yml:ro
     # Published so a test can probe what the "platform" actually received and sever the connection
     # on demand. Both are test affordances; nothing in the product talks to this service.
+    #
+    # 1936, not 1935: the real gateway took 1935 when external encoder ingest was enabled
+    # (ADR 0022), and two containers cannot publish the same host port. Nothing in the specs
+    # depends on this number — the relay reaches this service as `fake-platform:1935` on the
+    # compose network — so it exists only for manual probing from the host.
     ports:
-      - "1935:1935"
+      - "1936:1935"
       - "9998:9997"
 
   # A disposable mail server, for the same reason as the RTMP receiver above: the password-reset

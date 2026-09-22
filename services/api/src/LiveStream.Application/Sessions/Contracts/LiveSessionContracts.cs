@@ -89,6 +89,26 @@ public sealed record IngestCredentialResponse(
     int ExpiresInSeconds,
     IReadOnlyList<IceServerResponse> IceServers);
 
+/// <summary>
+/// What an external encoder needs to publish into a session: where to connect, and the key.
+///
+/// Two shapes of the same thing, because encoders disagree about how to ask for it. OBS and most
+/// phone apps want a server and a stream key as separate fields and join them with a slash;
+/// FFmpeg and a few others want one URL. Handing over both removes the step where somebody has to
+/// work out which half goes where, which is where this normally goes wrong.
+///
+/// <see cref="StreamKey"/> is returned exactly once, at issue, and is never retrievable again —
+/// only its hash is stored. Losing it means rotating it, which is one button.
+/// </summary>
+public sealed record StreamKeyResponse(
+    string Protocol,
+    string ServerUrl,
+    string StreamKey,
+    string FullUrl,
+    string? SrtUrl,
+    DateTimeOffset ExpiresAt,
+    int ExpiresInSeconds);
+
 /// <summary>An ICE server for the broadcaster to use. Mirrors the browser RTCIceServer shape.</summary>
 public sealed record IceServerResponse(
     IReadOnlyList<string> Urls,

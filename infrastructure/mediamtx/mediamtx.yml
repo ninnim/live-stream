@@ -69,14 +69,33 @@ hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 
 ###############################################
-# RTMP / SRT — optional professional inputs.
+# RTMP / SRT — external encoder inputs.
 #
-# Still disabled: native browser broadcasting is the required workflow, and an unused open ingest
-# port is only an attack surface. External encoders attach to the same Live Session model, so these
-# can be enabled later without any other change.
+# Enabled for the one thing native browser broadcasting cannot do: publish something the browser
+# cannot see. A mobile game, a console through a capture card, an OBS scene — all of them are
+# encoders, and RTMP is the only language every one of them speaks
+# (docs/decisions/0022-external-encoder-ingest.md).
+#
+# This is an open port that accepts a TCP connection from anywhere before any credential is
+# examined, which is exactly why it stayed off until there was a reason. What makes it safe enough
+# to turn on is that it changes nothing about authorization: `authHTTPAddress` below applies to
+# every protocol equally, so an RTMP publisher is checked against the control plane exactly as a
+# WHIP publisher is, and an anonymous connection gets no further than the handshake.
+#
+# A deployment that does not want it turns both of these back to `no` and leaves
+# Media__MediaMtx__PublicRtmpUrl unset; the studio then offers no encoder instructions at all.
 ###############################################
-rtmp: no
-srt: no
+rtmp: yes
+rtmpAddress: :1935
+# Plain RTMP. RTMPS would need certificates here, and the credential is a rotatable,
+# session-scoped, single-path key rather than an account password — see ADR 0022 on what that
+# trade is and when to revisit it.
+rtmpEncryption: "no"
+
+# SRT carries the same credentials inside its stream id. Offered alongside RTMP because it holds a
+# lossy mobile uplink together far better, which is the case this whole feature exists for.
+srt: yes
+srtAddress: :8890
 
 ###############################################
 # RTSP — internal read path for the egress relay (Phase 2).

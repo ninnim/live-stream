@@ -12,6 +12,7 @@ import type {
   Paged,
   Playback,
   Recording,
+  StreamKey,
 } from "@/lib/types";
 
 // ---------------------------------------------------------------------------------------------
@@ -95,6 +96,19 @@ export const liveSessionApi = {
    */
   issueCredential: (id: string) =>
     apiFetch<IngestCredential>(`/api/v1/live-sessions/${id}/sources/credentials`, { method: "POST" }),
+
+  /**
+   * Issues — or rotates — the stream key an external encoder publishes with.
+   *
+   * One call for both, because the key is shown once and never retrievable: asking for it a second
+   * time can only mean replacing it. The previous key stops working the instant this returns.
+   */
+  issueStreamKey: (id: string) =>
+    apiFetch<StreamKey>(`/api/v1/live-sessions/${id}/sources/stream-key`, { method: "POST" }),
+
+  /** Revokes the session's encoder keys. Browser broadcasting is unaffected. */
+  revokeStreamKey: (id: string) =>
+    apiFetch<void>(`/api/v1/live-sessions/${id}/sources/stream-key`, { method: "DELETE" }),
 
   /** Reports a client transport event for diagnostics. Never changes server-side session state. */
   reportSignal: (id: string, signal: BroadcasterSignal, detail?: string) =>

@@ -138,7 +138,9 @@ test.describe("native web broadcasting", () => {
     // Stop cleanly.
     // ---------------------------------------------------------------------------------------
     await page.getByRole("button", { name: "Stop Live" }).click();
-    await expect(page.getByText("Ended")).toBeVisible({ timeout: 45_000 });
+    // `exact`, because this is an assertion about the *status badge*: the studio also explains
+    // elsewhere that an ended session accepts no new video, and a loose match resolves to both.
+    await expect(page.getByText("Ended", { exact: true })).toBeVisible({ timeout: 45_000 });
 
     // ---------------------------------------------------------------------------------------
     // Recording metadata is finalized.
@@ -210,8 +212,9 @@ test.describe("native web broadcasting", () => {
       )
       .toBe("RECONNECTING");
 
-    // Critically: it must not have ended.
-    await expect(page.getByText("Ended")).toBeHidden();
+    // Critically: it must not have ended. Exact for the same reason as above — the badge is the
+    // claim being made, not any sentence that happens to contain the word.
+    await expect(page.getByText("Ended", { exact: true })).toBeHidden();
 
     // The publisher retries on its own, and the session returns to LIVE inside the recovery window.
     await expect

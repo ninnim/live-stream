@@ -152,6 +152,30 @@ public static class LiveSessionEndpoints
             .WithName("IssueIngestCredential")
             .WithSummary("Issues a short-lived, path-scoped credential for browser broadcasting.");
 
+        // Issuing and rotating are one endpoint because they are one action: the key is shown once,
+        // so asking for it again can only mean replacing it.
+        group.MapPost("/{id:guid}/sources/stream-key", async (
+                Guid id,
+                HttpContext http,
+                IngestCredentialService credentials,
+                CancellationToken cancellationToken) =>
+            Results.Ok(await credentials.IssueStreamKeyAsync(id, http.User.RequireUserId(), cancellationToken)))
+            .RequireRateLimiting(RateLimitPolicies.CredentialIssuance)
+            .WithName("IssueStreamKey")
+            .WithSummary("Issues or rotates the stream key an external encoder publishes with.");
+
+        group.MapDelete("/{id:guid}/sources/stream-key", async (
+                Guid id,
+                HttpContext http,
+                IngestCredentialService credentials,
+                CancellationToken cancellationToken) =>
+            {
+                await credentials.RevokeStreamKeysAsync(id, http.User.RequireUserId(), cancellationToken);
+                return Results.NoContent();
+            })
+            .WithName("RevokeStreamKey")
+            .WithSummary("Revokes the session's encoder stream keys, leaving browser credentials alone.");
+
         group.MapPost("/{id:guid}/broadcaster-signals", async (
                 Guid id,
                 [FromBody] BroadcasterSignalRequest request,

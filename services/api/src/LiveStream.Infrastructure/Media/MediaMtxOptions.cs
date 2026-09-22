@@ -35,6 +35,26 @@ public sealed class MediaMtxOptions
     /// </summary>
     public string? PublicHlsCdnUrl { get; set; }
 
+    /// <summary>
+    /// Public RTMP origin for external encoders, e.g. <c>rtmp://stream.example.com:1935</c>.
+    ///
+    /// Unset by default, and unset means the feature is off: no stream key can be issued and the
+    /// studio offers no encoder instructions. RTMP ingest is an open port that accepts a connection
+    /// from anywhere before any credential is checked, so a deployment turns it on deliberately —
+    /// here and in the gateway's own config — or not at all
+    /// (docs/decisions/0022-external-encoder-ingest.md).
+    /// </summary>
+    public string? PublicRtmpUrl { get; set; }
+
+    /// <summary>
+    /// Public SRT origin for external encoders, e.g. <c>srt://stream.example.com:8890</c>.
+    ///
+    /// Same rule as <see cref="PublicRtmpUrl"/>: absent means off. SRT is offered alongside RTMP
+    /// rather than instead of it because it survives a lossy mobile uplink far better, and a phone
+    /// on cellular is the case this exists for.
+    /// </summary>
+    public string? PublicSrtUrl { get; set; }
+
     /// <summary>Timeout for control API calls. Kept short so a slow gateway cannot stall a request thread.</summary>
     [Range(1, 30)]
     public int ControlApiTimeoutSeconds { get; set; } = 5;

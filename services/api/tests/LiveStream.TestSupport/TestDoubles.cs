@@ -71,11 +71,19 @@ public sealed class FakeMediaGateway : IMediaGateway
         return Task.FromResult(state);
     }
 
+    /// <summary>
+    /// Whether this deployment offers external encoder ingest. Settable so a test can assert the
+    /// off case, which is the default in a real deployment (ADR 0022).
+    /// </summary>
+    public bool ExternalIngestEnabled { get; set; } = true;
+
     public MediaEndpoints DescribeEndpoints(string mediaPathName) => new(
         "WHIP",
         $"https://media.test/{mediaPathName}/whip",
         $"https://media.test/{mediaPathName}/index.m3u8",
-        $"https://media.test/{mediaPathName}/whep");
+        $"https://media.test/{mediaPathName}/whep",
+        ExternalIngestEnabled ? "rtmp://media.test:1935" : null,
+        ExternalIngestEnabled ? "srt://media.test:8890" : null);
 
     // -------------------------------------------------------------------------------------
     // Test controls

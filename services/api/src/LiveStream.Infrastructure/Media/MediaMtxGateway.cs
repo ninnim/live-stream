@@ -197,7 +197,16 @@ public sealed class MediaMtxGateway(
             IngestProtocol: "WHIP",
             IngestUrl: $"{webRtcBase}/{mediaPathName}/whip",
             HlsPlaybackUrl: $"{hlsBase}/{mediaPathName}/index.m3u8",
-            WebRtcPlaybackUrl: $"{webRtcBase}/{mediaPathName}/whep");
+            WebRtcPlaybackUrl: $"{webRtcBase}/{mediaPathName}/whep",
+
+            // The origins only. The path and the key are assembled where the credential is minted,
+            // because half of what an encoder is given is a secret and this method handles none.
+            RtmpIngestUrl: string.IsNullOrWhiteSpace(_options.PublicRtmpUrl)
+                ? null
+                : _options.PublicRtmpUrl.TrimEnd('/'),
+            SrtIngestUrl: string.IsNullOrWhiteSpace(_options.PublicSrtUrl)
+                ? null
+                : _options.PublicSrtUrl.TrimEnd('/'));
     }
 
     // -----------------------------------------------------------------------------------------

@@ -16,6 +16,26 @@ public sealed class LiveSessionOptions
     public int IngestCredentialLifetimeSeconds { get; set; } = 300;
 
     /// <summary>
+    /// Lifetime of an external encoder's stream key.
+    /// </summary>
+    /// <remarks>
+    /// Twelve hours by default — two orders of magnitude longer than a browser credential, and
+    /// that is the point rather than an oversight. A key is typed into an encoder by hand and
+    /// re-presented on every reconnect, so anything short enough to be "safe" would drop the show
+    /// mid-broadcast and could not be renewed without the person stopping to retype it.
+    ///
+    /// The compensating controls are the ones that actually fit the threat: the key is bound to one
+    /// session's path, it is rotatable and revocable from the studio at any moment, issuing a new
+    /// one invalidates the old immediately, and every key dies with the session whatever its
+    /// remaining lifetime says. See docs/decisions/0022-external-encoder-ingest.md.
+    ///
+    /// The ceiling is one week. A key that outlives the show it was made for is a stream key in the
+    /// sense this platform set out not to have.
+    /// </remarks>
+    [Range(300, 604_800)]
+    public int StreamKeyLifetimeSeconds { get; set; } = 43_200;
+
+    /// <summary>
     /// How long a LIVE session may stay in RECONNECTING before it is declared FAILED.
     /// A temporary network outage must never be converted straight to ENDED (MASTER_BLUEPRINT.md §11.3).
     /// </summary>
@@ -46,6 +66,8 @@ public sealed class LiveSessionOptions
     public int MaxConcurrentSessionsPerWorkspace { get; set; } = 3;
 
     public TimeSpan IngestCredentialLifetime => TimeSpan.FromSeconds(IngestCredentialLifetimeSeconds);
+
+    public TimeSpan StreamKeyLifetime => TimeSpan.FromSeconds(StreamKeyLifetimeSeconds);
 
     public TimeSpan RecoveryWindow => TimeSpan.FromSeconds(RecoveryWindowSeconds);
 

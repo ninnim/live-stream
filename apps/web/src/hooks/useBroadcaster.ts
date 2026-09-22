@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "@/lib/api/client";
+import type { EncodingLimits } from "@/lib/media/adaptive";
 import { liveSessionApi } from "@/lib/api/live-sessions";
 import type { PublishQuality } from "@/lib/media/quality";
 import {
@@ -23,6 +24,8 @@ export interface UseBroadcasterResult {
   /** Measured from the browser's own encoder. `null` until something is publishing. */
   quality: PublishQuality | null;
   goLive: (stream: MediaStream) => Promise<void>;
+  /** Goes live on video this browser is not sending — an external encoder (ADR 0022). */
+  goLiveExternal: () => Promise<void>;
   /** Republishes into a session the server already considers live (e.g. after a studio reload). */
   resume: (stream: MediaStream) => Promise<void>;
   /**
@@ -32,6 +35,12 @@ export interface UseBroadcasterResult {
   replaceTrack: (track: MediaStreamTrack) => Promise<void>;
   /** Stops sending one kind of media, because its last device went away. */
   removeTrack: (kind: "video" | "audio") => Promise<void>;
+  /**
+   * Retunes the running encoder in place — bitrate, resolution scale, frame rate — with no
+   * renegotiation and no gap in the picture. Does nothing when not publishing, and is remembered
+   * so a reconnect comes back at the same rung.
+   */
+  applyEncoding: (limits: EncodingLimits) => Promise<void>;
   stopLive: () => Promise<void>;
   clearError: () => void;
 }
@@ -100,6 +109,16 @@ export function useBroadcaster({
     },
     [sessionId],
   );
+
+  /**
+   * Applies measured encoder limits to whatever is publishing now.
+   *
+   * Silent when nothing is: the adaptive controller samples on its own clock, and must not have to
+   * ask whether the transport is up before each decision.
+   */
+  const applyEncoding = useCallback(async (limits: EncodingLimits) => {
+    await publisherRef.current?.applyEncoding(limits);
+  }, []);
 
   const removeTrack = useCallback(async (kind: "video" | "audio") => {
     // Never reported as a device error: a device being unplugged is not a fault of the
@@ -241,6 +260,36 @@ export function useBroadcaster({
     [sessionId, createPublisher, onStatus],
   );
 
+  /**
+   * Goes live on video this browser is not sending.
+   *
+   * The encoder case (ADR 0022): a phone streaming a game, a capture card, OBS. There is no local
+   * publisher to open and nothing to swap tracks into — the media is already arriving at the
+   * gateway, or is about to — so this is `goLive` with the publishing step removed rather than a
+   * second lifecycle.
+   *
+   * The session sits in STARTING until the server sees ingest, exactly as it does for a browser
+   * that has published but not yet been confirmed. That is also what makes a wrong key visible:
+   * the start times out and says so, rather than appearing to work.
+   */
+  const goLiveExternal = useCallback(async () => {
+    setBusy(true);
+    setError(null);
+
+    try {
+      await liveSessionApi.prepare(sessionId);
+      onStatus(await liveSessionApi.start(sessionId));
+    } catch (startError) {
+      setError(
+        startError instanceof ApiError
+          ? startError.message
+          : "We could not start your broadcast. Please try again.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [sessionId, onStatus]);
+
   const stopLive = useCallback(async () => {
     setBusy(true);
     setError(null);
@@ -312,9 +361,11 @@ export function useBroadcaster({
     error,
     quality,
     goLive,
+    goLiveExternal,
     resume,
     replaceTrack,
     removeTrack,
+    applyEncoding,
     stopLive,
     clearError,
   };
