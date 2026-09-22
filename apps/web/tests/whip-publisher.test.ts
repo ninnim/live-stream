@@ -840,6 +840,99 @@ describe("WhipPublisher video ceiling", () => {
 
     expect(peers[0]?.senders[0]?.parameters.encodings?.[0]?.maxBitrate).toBeUndefined();
   });
+
+  it("leaves resolution and frame rate alone when nothing has asked to adapt", async () => {
+    // Every desktop broadcast. The adaptive fields must not appear in the parameters of a
+    // publisher that was never given limits — ADR 0011 §7 keeps that path manual.
+    const { publisher, peers } = createHarness();
+
+    await publisher.start();
+
+    const encoding = peers[0]?.senders[0]?.parameters.encodings?.[0];
+    expect(encoding?.scaleResolutionDownBy).toBeUndefined();
+    expect(encoding?.maxFramerate).toBeUndefined();
+  });
+});
+
+/**
+ * Adaptive encoder control (docs/decisions/0021-mobile-broadcasting.md).
+ *
+ * The point of applying limits through `setParameters` rather than by re-opening the camera is that
+ * nothing is renegotiated: the peer connection, the senders and the tracks all survive, so the
+ * audience sees a softer picture rather than a gap. These tests assert exactly that.
+ */
+describe("WhipPublisher adaptive encoding", () => {
+  it("retunes the running encoder without touching the connection", async () => {
+    const { publisher, peers } = createHarness();
+
+    await publisher.start();
+    const peer = peers[0]!;
+
+    await publisher.applyEncoding({ maxBitrate: 700_000, scaleResolutionDownBy: 2, maxFramerate: 24 });
+
+    const encoding = peer.senders[0]?.parameters.encodings?.[0];
+    expect(encoding?.maxBitrate).toBe(700_000);
+    expect(encoding?.scaleResolutionDownBy).toBe(2);
+    expect(encoding?.maxFramerate).toBe(24);
+
+    // The evidence that this is not a renegotiation: one connection, one WHIP POST, nothing closed.
+    expect(peers).toHaveLength(1);
+    expect(peer.closed).toBe(false);
+  });
+
+  it("keeps the limits through a reconnect", async () => {
+    const { publisher, peers, runTimers } = createHarness();
+
+    await publisher.start();
+    await publisher.applyEncoding({ maxBitrate: 350_000, scaleResolutionDownBy: 3 });
+
+    // A reconnect happens because the network faltered, which is the moment the limits matter
+    // most. Coming back at full quality into the link that just failed would fail it again.
+    peers[0]!.transitionTo("failed");
+    await runTimers();
+
+    expect(peers).toHaveLength(2);
+    expect(peers[1]?.senders[0]?.parameters.encodings?.[0]?.maxBitrate).toBe(350_000);
+    expect(peers[1]?.senders[0]?.parameters.encodings?.[0]?.scaleResolutionDownBy).toBe(3);
+  });
+
+  it("returns to full size when the ladder climbs back", async () => {
+    const { publisher, peers } = createHarness();
+
+    await publisher.start();
+    await publisher.applyEncoding({ maxBitrate: 700_000, scaleResolutionDownBy: 2, maxFramerate: 24 });
+    await publisher.applyEncoding({ maxBitrate: 2_500_000, scaleResolutionDownBy: 1, maxFramerate: 30 });
+
+    const encoding = peers[0]?.senders[0]?.parameters.encodings?.[0];
+    expect(encoding?.scaleResolutionDownBy).toBe(1);
+    expect(encoding?.maxFramerate).toBe(30);
+  });
+
+  it("clears a frame-rate cap that no longer applies", async () => {
+    const { publisher, peers } = createHarness();
+
+    await publisher.start();
+    await publisher.applyEncoding({ maxFramerate: 20 });
+    await publisher.applyEncoding({ maxBitrate: 2_500_000 });
+
+    // Left in place, a cap from a rung nobody is on any more quietly holds the broadcast at 20fps.
+    expect(peers[0]?.senders[0]?.parameters.encodings?.[0]?.maxFramerate).toBeUndefined();
+  });
+
+  it("does nothing, rather than throwing, when nothing is publishing", async () => {
+    const { publisher } = createHarness();
+
+    await expect(publisher.applyEncoding({ maxBitrate: 700_000 })).resolves.toBeUndefined();
+  });
+
+  it("applies limits that arrived before the connection existed", async () => {
+    const { publisher, peers } = createHarness();
+
+    await publisher.applyEncoding({ maxBitrate: 700_000 });
+    await publisher.start();
+
+    expect(peers[0]?.senders[0]?.parameters.encodings?.[0]?.maxBitrate).toBe(700_000);
+  });
 });
 
 /**

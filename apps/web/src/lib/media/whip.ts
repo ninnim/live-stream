@@ -15,6 +15,7 @@
  * dropout, and a later reconnect uses whatever track is current.
  */
 
+import type { EncodingLimits } from "@/lib/media/adaptive";
 import {
   type OutboundSample,
   type PublishQuality,
@@ -267,6 +268,15 @@ export class WhipPublisher {
   /** Previous stats reading. Cleared per connection: a new peer connection restarts its counters. */
   private previousSample: OutboundSample | null = null;
 
+  /**
+   * Encoder limits applied on top of this publisher's defaults, from {@link applyEncoding}.
+   *
+   * Deliberately *not* cleared when the connection is rebuilt. A reconnect happens because the
+   * network faltered, which is the moment the limits matter most — throwing them away would have
+   * every reconnect start again at full quality into the link that just failed.
+   */
+  private encodingLimits: EncodingLimits | null = null;
+
   private readonly maxReconnectAttempts: number;
   private readonly fetchImpl: typeof fetch;
   private readonly createPeerConnection: (config: RTCConfiguration) => RTCPeerConnection;
@@ -348,6 +358,33 @@ export class WhipPublisher {
     if (track.kind === "video") {
       await this.tuneVideoSender(sender, track);
     }
+  }
+
+  /**
+   * Retunes the running encoder, without renegotiating anything.
+   *
+   * `setParameters` changes bitrate, resolution scale and frame rate inside the connection that is
+   * already up: there is no new offer, no new peer connection, and no gap in what the audience is
+   * watching. That is what makes automatic adaptation acceptable on a phone at all — the
+   * alternative, re-opening the camera at a different rung, blacks the outgoing video out for as
+   * long as the device takes to re-open (ADR 0021).
+   *
+   * Never throws. A browser that will not apply a limit leaves the broadcast exactly as it was,
+   * which is a worse picture rather than no picture.
+   */
+  async applyEncoding(limits: EncodingLimits): Promise<void> {
+    this.encodingLimits = limits;
+
+    const sender = this.videoSender;
+    const track = this.videoTrack;
+    if (!sender || !track || this.disposed) return;
+
+    await this.tuneVideoSender(sender, track);
+  }
+
+  /** The limits currently in force, for a caller that needs to show them. */
+  get encoding(): EncodingLimits | null {
+    return this.encodingLimits;
   }
 
   /**
@@ -564,12 +601,34 @@ export class WhipPublisher {
       // unset, the browser picks its own — around 2.5 Mbps for a shared screen, which is thin for
       // 1080p and visibly thin at 60fps.
       //
+      // Adaptive limits win over the publisher's default, because they were measured from this
+      // broadcast rather than assumed before it started.
+      const ceiling = this.encodingLimits?.maxBitrate ?? this.options.videoBitrate;
+      const scale = this.encodingLimits?.scaleResolutionDownBy;
+      const frameRate = this.encodingLimits?.maxFramerate;
+
       // `encodings` can be empty before the first negotiation completes, in which case there is
       // nothing to tune yet and the next reconnect will do it.
-      const ceiling = this.options.videoBitrate;
-      if (ceiling && parameters.encodings?.length) {
+      if (parameters.encodings?.length) {
         for (const encoding of parameters.encodings) {
-          encoding.maxBitrate = ceiling;
+          if (ceiling) encoding.maxBitrate = ceiling;
+
+          // Resolution and frame rate are only ever touched by a caller that asked for them, so a
+          // publisher with no adaptive limits — every desktop broadcast — sends exactly the
+          // parameters it always did.
+          //
+          // Within that, both are written on every call rather than only when present: each rung
+          // states all three, so climbing back is what clears a scale or a cap that an earlier
+          // rung set. Leaving them behind would hold a recovered broadcast at 20fps.
+          if (this.encodingLimits) {
+            encoding.scaleResolutionDownBy = scale ?? 1;
+
+            if (frameRate) {
+              encoding.maxFramerate = frameRate;
+            } else {
+              delete encoding.maxFramerate;
+            }
+          }
         }
       }
 

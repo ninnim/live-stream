@@ -259,16 +259,28 @@ export const DEFAULT_CAPTURE_QUALITY: CaptureQuality = "720p";
 export function videoConstraints(
   quality: CaptureQuality = DEFAULT_CAPTURE_QUALITY,
   deviceId?: string,
+  /**
+   * Overrides the rung's frame rate.
+   *
+   * Exists for the phone, which asks for 30 at every rung: capturing 60 on a phone doubles the
+   * bitrate the uplink has to carry and the heat the encoder has to make, for frames that a
+   * handheld broadcast never needed (`@/lib/media/mobile`). Left undefined, the rung decides, and
+   * nothing about the studio changes.
+   */
+  frameRate?: number,
 ): MediaTrackConstraints {
   const base: MediaTrackConstraints = deviceId ? { deviceId: { exact: deviceId } } : {};
-  if (quality === "auto") return base;
+
+  if (quality === "auto") {
+    return frameRate ? { ...base, frameRate: { ideal: frameRate } } : base;
+  }
 
   const profile = VIDEO_PROFILES[quality];
   return {
     ...base,
     width: { ideal: profile.width },
     height: { ideal: profile.height },
-    frameRate: { ideal: profile.frameRate },
+    frameRate: { ideal: frameRate ?? profile.frameRate },
   };
 }
 
@@ -321,6 +333,16 @@ export interface CameraRequest {
   quality?: CaptureQuality;
   /** Prefers the front or rear camera. Ignored on hardware that reports no facing mode. */
   facingMode?: "user" | "environment";
+  /** Overrides the rung's frame rate. See {@link videoConstraints}. */
+  frameRate?: number;
+  /**
+   * How the encoder should grade this camera under load, set on the track before it is published.
+   *
+   * `motion` is right for a handheld phone and is what the mobile broadcaster asks for: shed
+   * resolution, keep the frame rate. The publisher reads the hint back off the track when it sets
+   * the sender's degradation preference, so this is where the decision belongs.
+   */
+  contentHint?: "motion" | "detail";
 }
 
 /**
@@ -332,22 +354,28 @@ export interface CameraRequest {
 export async function requestCameraTrack(request: CameraRequest = {}): Promise<MediaStreamTrack> {
   const quality = request.quality ?? DEFAULT_CAPTURE_QUALITY;
 
-  const constraints = videoConstraints(quality, request.deviceId);
+  const constraints = videoConstraints(quality, request.deviceId, request.frameRate);
   if (request.facingMode && !request.deviceId) {
     // `ideal`, because a laptop has no rear camera and should still open the one it has.
     constraints.facingMode = { ideal: request.facingMode };
   }
 
   try {
-    return firstTrack(await getUserMedia({ video: constraints, audio: false }), "camera");
+    return hinted(
+      firstTrack(await getUserMedia({ video: constraints, audio: false }), "camera"),
+      request.contentHint,
+    );
   } catch (error) {
     const name = error instanceof Error ? error.name : "";
 
     if ((name === "OverconstrainedError" || name === "NotFoundError") && request.deviceId) {
       try {
-        return firstTrack(
-          await getUserMedia({ video: videoConstraints(quality), audio: false }),
-          "camera",
+        return hinted(
+          firstTrack(
+            await getUserMedia({ video: videoConstraints(quality, undefined, request.frameRate), audio: false }),
+            "camera",
+          ),
+          request.contentHint,
         );
       } catch (fallbackError) {
         throw await describeFailure(fallbackError, "camera");
@@ -356,6 +384,24 @@ export async function requestCameraTrack(request: CameraRequest = {}): Promise<M
 
     throw await describeFailure(error, "camera");
   }
+}
+
+/**
+ * Labels a track with what it is carrying, where the caller said.
+ *
+ * Best effort: `contentHint` is a hint in the specification's own words, a browser that ignores it
+ * simply grades the track the way it would have anyway, and no broadcast should fail over one.
+ */
+function hinted(track: MediaStreamTrack, contentHint?: string): MediaStreamTrack {
+  if (contentHint) {
+    try {
+      track.contentHint = contentHint;
+    } catch {
+      // Unsupported on this browser. The encoder picks its own grading.
+    }
+  }
+
+  return track;
 }
 
 export interface MicrophoneRequest {

@@ -19,6 +19,15 @@ import { defineConfig, devices } from "@playwright/test";
  */
 const webBaseUrl = process.env.E2E_WEB_URL ?? "http://localhost:3000";
 
+/** Synthetic camera, synthetic microphone, and no permission prompt to click. */
+const FAKE_MEDIA_ARGS = [
+  // A synthetic 30fps video source and a tone generator, so no hardware is required.
+  "--use-fake-device-for-media-stream",
+  // Auto-accept the camera/microphone prompt.
+  "--use-fake-ui-for-media-stream",
+  "--autoplay-policy=no-user-gesture-required",
+];
+
 export default defineConfig({
   testDir: "./e2e",
   // Publishing, going live and finalizing a recording involve real media and real timers.
@@ -42,16 +51,33 @@ export default defineConfig({
       name: "chromium",
       use: {
         ...devices["Desktop Chrome"],
-        launchOptions: {
-          args: [
-            // A synthetic 30fps video source and a tone generator, so no hardware is required.
-            "--use-fake-device-for-media-stream",
-            // Auto-accept the camera/microphone prompt.
-            "--use-fake-ui-for-media-stream",
-            "--autoplay-policy=no-user-gesture-required",
-          ],
-        },
+        launchOptions: { args: FAKE_MEDIA_ARGS },
       },
+      // The mobile spec has its own project; running it here would exercise the desktop studio
+      // under a phone-shaped spec and fail on controls that do not exist there.
+      testIgnore: /mobile-broadcast\.spec\.ts/,
+    },
+    {
+      /**
+       * Phase 3. A Pixel-sized viewport with touch and a phone user agent — the three signals the
+       * studio's form-factor detection actually reads — so the mobile broadcaster is chosen the
+       * way a real phone would choose it rather than by a test flag.
+       *
+       * Built from `Desktop Chrome` with those overrides rather than from a `devices["Pixel 7"]`
+       * descriptor, because that descriptor also sets `isMobile`, which is Chromium-only and
+       * changes nothing this detection looks at.
+       */
+      name: "mobile-chrome",
+      use: {
+        ...devices["Desktop Chrome"],
+        viewport: { width: 412, height: 915 },
+        deviceScaleFactor: 2.6,
+        hasTouch: true,
+        userAgent:
+          "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Mobile Safari/537.36",
+        launchOptions: { args: FAKE_MEDIA_ARGS },
+      },
+      testMatch: /mobile-broadcast\.spec\.ts/,
     },
   ],
 });

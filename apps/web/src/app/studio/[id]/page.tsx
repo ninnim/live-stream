@@ -1,6 +1,6 @@
-import { LiveStudio } from "@/components/studio/LiveStudio";
+import { StudioShell } from "@/components/studio/StudioShell";
 
 export default async function StudioPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
-  return <LiveStudio sessionId={id} />;
+  return <StudioShell sessionId={id} />;
 }
